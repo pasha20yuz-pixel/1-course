@@ -1,0 +1,12 @@
+parse 5*(14-4*2)/2
+save_prf
+save_pst
+eval
+parse a+b*c
+eval a=2 b=3 c=4
+load_prf / * 5 - 14 * 4 2 2
+eval
+load_pst 5 14 4 2 * - * 2 /
+eval
+parse 2^3+6#9
+eval

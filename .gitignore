@@ -1,0 +1,24 @@
+﻿# Compiled files
+*.exe
+*.o
+*.obj
+*.out
+*.so
+*.dll
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs and temp
+*.log
+*.tmp
+*.swp
+.DS_Store
+Thumbs.db
+
+# Archives (optional)
+*.7z
+*.zip
+*.tar.gz

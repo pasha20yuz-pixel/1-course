@@ -1,0 +1,10 @@
+4 4
+2 5
+000
+000
+000
+000
+000
+000
+000
+Level 1: Infect all cells (use 2 start cells)

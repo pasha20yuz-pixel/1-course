@@ -1,0 +1,60 @@
+команды для демонстрации лаб оцт
+# Показать версию Ubuntu
+echo "=== Информация о системе ==="
+lsb_release -a
+
+# Показать версию Bash
+echo "=== Версия Bash ==="
+bash --version | head -1
+
+# Показать текущего пользователя
+echo "=== Текущий пользователь ==="
+whoami
+# Перейти в папку проекта
+cd ~/lab3_backup_system
+
+# Показать структуру
+echo "=== Структура проекта ==="
+find . -type f | sort
+echo "=== Содержимое папки test_data ==="
+ls -la test_data/
+echo ""
+cat test_data/*
+echo "=== Ручной запуск скрипта ==="
+./scripts/backup_script.sh ./test_data ./backups 3
+echo "=== Результат архивации ==="
+ls -lh backups/
+echo ""
+echo "=== Информация о архиве ==="
+tar -tzf backups/backup_*.tar.gz | head -5
+echo "=== Настройки Cron ==="
+crontab -l
+echo "=== Логи работы скрипта через Cron ==="
+if [ -f "backup.log" ]; then
+    tail -20 backup.log
+sudo grep CRON /var/log/syslog | tail -5
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+clear
+echo "=== НАЧАЛО ДЕМОНСТРАЦИИ ==="
+echo "1. Проверяем структуру проекта..."
+tree ~/lab3_backup_system || find ~/lab3_backup_system
+
+echo ""
+echo "2. Запускаем скрипт вручную..."
+./scripts/backup_script.sh ./test_data ./backups 3
+
+echo ""
+echo "3. Показываем результат..."
+ls -lh backups/
+
+echo ""
+echo "4. Показываем настройки Cron..."
+crontab -l
+
+echo ""
+echo "5. Показываем логи..."
+tail -10 backup.log 2>/dev/null || echo "Логирование не настроено"
+
+echo ""
+echo "=== ДЕМОНСТРАЦИЯ ЗАВЕРШЕНА ==="

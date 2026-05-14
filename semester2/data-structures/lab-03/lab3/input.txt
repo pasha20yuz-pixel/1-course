@@ -1,0 +1,9 @@
+insert geo_id=1,geo_pos=Moscow,mea_date=15.03.2024,level=120,sunrise=06:30,weather=fair,sundown=18:45
+insert geo_id=1,geo_pos=Moscow,mea_date=15.03.2024,level=120,sunrise=06:30,weather=fair,sundown=18:45
+insert geo_id=1,geo_pos=Moscow,mea_date=15.03.2024,level=120,sunrise=06:30,weather=fair,sundown=18:45
+insert geo_id=1,geo_pos=Moscow,mea_date=15.03.2024,level=120,sunrise=06:30,weather=fair,sundown=18:45
+insert geo_id=1,geo_pos=Moscow,mea_date=15.03.2024,level=120,sunrise=06:30,weather=fair,sundown=18:45
+insert geo_id=2,geo_pos=St.Petersburg,mea_date=15.03.2024,level=10,sunrise=07:00,weather=rain,sundown=19:00
+select geo_id,geo_pos,weather
+uniq
+select geo_id,geo_pos,weather

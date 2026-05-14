@@ -1,0 +1,19 @@
+CC = gcc
+CFLAGS = -std=c99 -D_WIN32_WINNT=0x0601 -I"C:/raylib/include"
+LDFLAGS = -L"C:/raylib/lib" -lraylib -lopengl32 -lgdi32 -lwinmm -lm
+SRC = src/main_raylib.c src/patterns.c src/file_io.c src/world.c src/barriers.c src/levels.c
+OBJ = $(SRC:.c=.o)
+TARGET = game.exe
+
+all: $(TARGET)
+
+$(TARGET): $(OBJ)
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+clean:
+	del $(OBJ) $(TARGET)
+
+.PHONY: all clean

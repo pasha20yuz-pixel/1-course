@@ -1,0 +1,57 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build-avl",
+            "type": "shell",
+            "command": "gcc",
+            "args": [
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-g",                // добавили отладочную информацию
+                "main.c",
+                "avl.c",
+                "-o",
+                "avl_prog.exe"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "build-rb",
+            "type": "shell",
+            "command": "gcc",
+            "args": [
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-g",
+                "-DUSE_RB_TREE",
+                "main.c",
+                "rb_tree.c",
+                "-o",
+                "rb_prog.exe"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "clean",
+            "type": "shell",
+            "command": "del",
+            "args": [
+                "*.exe",
+                "*.o"
+            ],
+            "group": "build",
+            "problemMatcher": []
+        }
+    ]
+}

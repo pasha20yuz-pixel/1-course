@@ -1,0 +1,13 @@
+insert 20
+insert 10
+insert 30
+insert 25
+insert 40
+find 10
+kth 3
+range_count 15 35
+prev 25
+next 25
+size 30
+delete 30
+print

@@ -1,0 +1,4 @@
+insert geo_id=1,geo_pos=Moscow,mea_date=15.03.2024,level=120,sunrise=06:30:00,weather=fair,sundown=18:45:00
+insert geo_id=2,geo_pos=St.Petersburg,mea_date=15.03.2024,level=10,sunrise=07:00:00,weather=rain,sundown=19:00:00
+update weather=snow level>=100
+select geo_id,weather

@@ -1,0 +1,28 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "type": "shell",
+            "command": "gcc",
+            "args": [
+                "-std=c99", "-D_WIN32_WINNT=0x0601",
+                "-I", "C:/raylib/include",
+                "-L", "C:/raylib/lib",
+                "src/main_raylib.c",
+                "src/patterns.c",
+                "src/file_io.c",
+                "src/world.c",
+                "src/barriers.c",
+                "src/levels.c",
+                "-lraylib", "-lopengl32", "-lgdi32", "-lwinmm", "-lm",
+                "-o", "game.exe"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"]
+        }
+    ]
+}

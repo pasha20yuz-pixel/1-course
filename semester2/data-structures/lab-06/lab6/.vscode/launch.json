@@ -1,0 +1,19 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Hash Table",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/hash_lab.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": true,   // чтобы видеть ввод/вывод
+            "MIMode": "gdb",
+            "miDebuggerPath": "C:\\Users\\pasha\\gcc\\bin\\gdb.exe",
+            "preLaunchTask": "Build hash table"
+        }
+    ]
+}
