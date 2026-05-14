@@ -1,13 +1,15 @@
-#include "memstat.h"
+﻿#include "memstat.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 // ---------- AST node ----------
 typedef enum {
     NODE_NUMBER,
     NODE_VARIABLE,
-    NODE_BINARY_OP
+    NODE_BINARY_OP,
+    NODE_UNARY_OP
 } NodeType;
 
 typedef struct AstNode {
@@ -20,10 +22,13 @@ typedef struct AstNode {
             struct AstNode* left;
             struct AstNode* right;
         } binary;
+        struct {
+            char op;
+            struct AstNode* operand;
+        } unary;
     };
 } AstNode;
 
-// ---------- create / free ----------
 AstNode* create_number_node(long long val) {
     AstNode* node = (AstNode*)MALLOC(sizeof(AstNode));
     node->type = NODE_NUMBER;
@@ -48,16 +53,29 @@ AstNode* create_binary_node(char op, AstNode* left, AstNode* right) {
     return node;
 }
 
+AstNode* create_unary_node(char op, AstNode* operand) {
+    AstNode* node = (AstNode*)MALLOC(sizeof(AstNode));
+    node->type = NODE_UNARY_OP;
+    node->unary.op = op;
+    node->unary.operand = operand;
+    return node;
+}
+
 void free_ast(AstNode* node) {
     if (!node) return;
-    if (node->type == NODE_BINARY_OP) {
-        free_ast(node->binary.left);
-        free_ast(node->binary.right);
+    switch (node->type) {
+        case NODE_BINARY_OP:
+            free_ast(node->binary.left);
+            free_ast(node->binary.right);
+            break;
+        case NODE_UNARY_OP:
+            free_ast(node->unary.operand);
+            break;
+        default: break;
     }
     FREE(node);
 }
 
-// ---------- обходы ----------
 static void prefix_rec(AstNode* node, char* buf, size_t* pos, size_t size) {
     if (!node) return;
     int n;
@@ -77,6 +95,12 @@ static void prefix_rec(AstNode* node, char* buf, size_t* pos, size_t size) {
             prefix_rec(node->binary.left, buf, pos, size);
             if (*pos < size) buf[(*pos)++] = ' ';
             prefix_rec(node->binary.right, buf, pos, size);
+            break;
+        case NODE_UNARY_OP:
+            n = snprintf(buf + *pos, size - *pos, "%c", node->unary.op);
+            *pos += n;
+            if (*pos < size) buf[(*pos)++] = ' ';
+            prefix_rec(node->unary.operand, buf, pos, size);
             break;
     }
 }
@@ -109,6 +133,12 @@ static void postfix_rec(AstNode* node, char* buf, size_t* pos, size_t size) {
             n = snprintf(buf + *pos, size - *pos, "%c", node->binary.op);
             *pos += n;
             break;
+        case NODE_UNARY_OP:
+            postfix_rec(node->unary.operand, buf, pos, size);
+            if (*pos < size) buf[(*pos)++] = ' ';
+            n = snprintf(buf + *pos, size - *pos, "%c", node->unary.op);
+            *pos += n;
+            break;
     }
 }
 
@@ -120,7 +150,6 @@ void to_postfix(AstNode* node, char* buffer, size_t size) {
     else buffer[size-1] = '\0';
 }
 
-// ---------- вычисление ----------
 typedef struct {
     char name[64];
     long long value;
@@ -142,42 +171,33 @@ static long long pow_ll(long long base, long long exp) {
 long long evaluate(AstNode* node, Variable* vars, int var_count, int* error) {
     if (!node) { *error = 1; return 0; }
     switch (node->type) {
-        case NODE_NUMBER:
-            return node->value;
+        case NODE_NUMBER: return node->value;
         case NODE_VARIABLE:
             for (int i = 0; i < var_count; i++)
                 if (strcmp(vars[i].name, node->var_name) == 0)
                     return vars[i].value;
-            *error = 1;
-            return 0;
+            *error = 1; return 0;
         case NODE_BINARY_OP: {
             long long left = evaluate(node->binary.left, vars, var_count, error);
             if (*error) return 0;
             long long right = evaluate(node->binary.right, vars, var_count, error);
             if (*error) return 0;
-            char op = node->binary.op;
-            switch (op) {
+            switch (node->binary.op) {
                 case '+': return left + right;
                 case '-': return left - right;
                 case '*': return left * right;
-                case '/':
-                    if (right == 0) { *error = 1; return 0; }
-                    return left / right;
-                case '%':
-                    if (right == 0) { *error = 1; return 0; }
-                    return left % right;
-                case '^':
-                    if (right < 0) { *error = 1; return 0; }
-                    return pow_ll(left, right);
-                case '#':
-                    return gcd(left, right);
-                default:
-                    *error = 1;
-                    return 0;
+                case '/': if (right == 0) { *error = 1; return 0; } return left / right;
+                case '%': if (right == 0) { *error = 1; return 0; } return left % right;
+                case '^': if (right < 0) { *error = 1; return 0; } return pow_ll(left, right);
+                case '#': return gcd(left, right);
+                default: *error = 1; return 0;
             }
         }
-        default:
-            *error = 1;
-            return 0;
+        case NODE_UNARY_OP: {
+            long long val = evaluate(node->unary.operand, vars, var_count, error);
+            if (*error) return 0;
+            return (node->unary.op == '-') ? -val : val;
+        }
+        default: *error = 1; return 0;
     }
 }

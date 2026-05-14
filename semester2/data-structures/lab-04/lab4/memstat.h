@@ -1,4 +1,4 @@
-#ifndef MEMSTAT_H
+﻿#ifndef MEMSTAT_H
 #define MEMSTAT_H
 
 #include <stdlib.h>

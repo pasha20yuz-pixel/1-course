@@ -1,4 +1,4 @@
-parse 5*(14-4*2)/2
+﻿parse 5*(14-4*2)/2
 save_prf
 save_pst
 eval
@@ -9,4 +9,7 @@ eval
 load_pst 5 14 4 2 * - * 2 /
 eval
 parse 2^3+6#9
+eval
+parse -5+-(2-3)
+save_prf
 eval
