@@ -1,5 +1,4 @@
-// main.c – исправленный полный текст
-#include <stdio.h>
+﻿#include <stdio.h>
 #include <string.h>
 #include "include/types.h"
 #include "include/cmd.h"
@@ -38,7 +37,7 @@ int main(int argc, char **argv) {
         execute_command(line, &db, output);
     }
 
-    free_list(&db);          // <-- освобождение всей памяти
+    free_list(&db);
     write_memstat();
     fclose(output);
     return 0;

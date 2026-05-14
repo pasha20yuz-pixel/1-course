@@ -1,4 +1,4 @@
-#include <stdio.h>
+﻿#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
@@ -35,7 +35,6 @@ static int str_to_weather(const char *s, weather_type *out_w)
     return 0;
 }
 
-// Парсинг даты в формате dd.mm.yyyy (время устанавливается в 00:00:00)
 static int parse_date(const char *s, time_t *t)
 {
     struct tm tm = {0};
@@ -52,7 +51,6 @@ static int parse_date(const char *s, time_t *t)
     return (*t != (time_t)-1);
 }
 
-// Парсинг времени в формате hh:mm (дата фиксированная 1970-01-01)
 static int parse_time_of_day(const char *s, time_t *t)
 {
     struct tm tm = {0};
@@ -69,14 +67,12 @@ static int parse_time_of_day(const char *s, time_t *t)
     return (*t != (time_t)-1);
 }
 
-// Форматирование даты (без времени)
 static void fmt_date(time_t t, char *buf, size_t sz)
 {
     struct tm *tm = localtime(&t);
     strftime(buf, sz, "%d.%m.%Y", tm);
 }
 
-// Форматирование времени (без даты)
 static void fmt_time_of_day(time_t t, char *buf, size_t sz)
 {
     struct tm *tm = localtime(&t);
@@ -177,10 +173,8 @@ static void strip_quotes(char *s)
     }
 }
 
-/* Парсит одно условие, возвращает 1/0 */
 static int parse_cond(const char *src, cond *c)
 {
-    /* /in/ */
     const char *sl = strchr(src, '/');
     if (sl) {
         size_t fl = sl - src;
@@ -193,7 +187,6 @@ static int parse_cond(const char *src, cond *c)
         strncpy(c->v, sl2+1, 255); c->v[255] = '\0';
         return 1;
     }
-    /* двухсимвольные операторы первыми, чтобы не срабатывал '<' раньше '<=' */
     static const struct { const char *str; op_t op; } OPS[] = {
         {"<=",OP_LE},{">=",OP_GE},{"!=",OP_NE},{"<",OP_LT},{">",OP_GT},{"=",OP_EQ}
     };
@@ -210,7 +203,6 @@ static int parse_cond(const char *src, cond *c)
     return 0;
 }
 
-/* Разбивает оставшуюся строку на условия через пробел */
 static int parse_conds(char *rest, cond *conds) {
     int n = 0;
     char *tok = strtok(rest, " \t");
@@ -222,13 +214,11 @@ static int parse_conds(char *rest, cond *conds) {
     return n;
 }
 
-/* Вычисление одного условия */
 static int eval_cond(const weather_station *s, const cond *c) {
     char fval[256];
     get_field(s, c->f, fval, sizeof(fval));
 
     if (c->op == OP_IN) {
-        /* ['val1','val2',...] */
         char list[256];
         strncpy(list, c->v, 255);
         char *p = list;
@@ -244,14 +234,12 @@ static int eval_cond(const weather_station *s, const cond *c) {
         return 0;
     }
 
-    /* сравнение: числовое для geo_id/level, время для mea_date/sunrise/sundown, иначе строка */
     int cmp;
     if (!strcmp(c->f,"geo_id") || !strcmp(c->f,"level")) {
         long a = atol(fval), b = atol(c->v);
         cmp = (a > b) - (a < b);
     } else if (!strcmp(c->f,"mea_date") || !strcmp(c->f,"sunrise") || !strcmp(c->f,"sundown")) {
         time_t ta, tb;
-        // Для mea_date нужно парсить как дату, для времени как время
         if (!strcmp(c->f,"mea_date")) {
             if (!parse_date(fval, &ta) || !parse_date(c->v, &tb)) return 0;
         } else {
@@ -315,7 +303,6 @@ static void cmd_insert(const char *args, list *db, FILE *f) {
     int n = parse_fv(args, pairs);
     if (n < 0) { out(f, "incorrect %.20s\n", args); return; }
 
-    /* все 7 полей, без дублей */
     int found[7] = {0};
     for (int i = 0; i < n; i++) {
         int idx = -1;
@@ -344,7 +331,6 @@ static void cmd_select(const char *args, list *db, FILE *f) {
     char buf[4096];
     strncpy(buf, args, sizeof(buf)-1); buf[sizeof(buf)-1] = '\0';
 
-    /* первый токен — имена полей */
     char *sp = buf; while (*sp == ' ') sp++;
     char *fe = sp;  while (*fe && *fe != ' ' && *fe != '\t') fe++;
     char names_str[512]; size_t fl = fe - sp;
@@ -435,7 +421,6 @@ static void cmd_uniq(const char *args, list *db, FILE *f) {
     node **pp = &db->head;
     while (*pp) {
         node *cur = *pp;
-        /* ищем дубликат позже в списке */
         int dup = 0;
         for (node *later = cur->next; later && !dup; later = later->next) {
             int match = 1;
@@ -453,6 +438,170 @@ static void cmd_uniq(const char *args, list *db, FILE *f) {
     out(f, "uniq: %d\n", del);
 }
 
+// ---------- Дополнительное задание: export и import CSV ----------
+static void escape_csv_field(const char *src, char *dst, size_t dst_size) {
+    int need_quote = (strchr(src, ',') != NULL) || (strchr(src, '"') != NULL);
+    if (!need_quote) {
+        strncpy(dst, src, dst_size-1);
+        dst[dst_size-1] = '\0';
+        return;
+    }
+    size_t pos = 0;
+    if (pos < dst_size-1) dst[pos++] = '"';
+    for (const char *p = src; *p && pos < dst_size-2; p++) {
+        if (*p == '"') {
+            if (pos < dst_size-3) { dst[pos++] = '"'; dst[pos++] = '"'; }
+        } else {
+            dst[pos++] = *p;
+        }
+    }
+    if (pos < dst_size-1) dst[pos++] = '"';
+    dst[pos] = '\0';
+}
+
+static void cmd_export(const char *args, list *db, FILE *f) {
+    if (!args || !*args) {
+        out(f, "incorrect export\n");
+        return;
+    }
+    char filename[256];
+    if (sscanf(args, "%255s", filename) != 1) {
+        out(f, "incorrect export\n");
+        return;
+    }
+    FILE *csv = fopen(filename, "w");
+    if (!csv) {
+        out(f, "incorrect export\n");
+        return;
+    }
+    const char *headers[] = {"geo_id","geo_pos","mea_date","level","sunrise","weather","sundown"};
+    for (int i = 0; i < 7; i++) {
+        fprintf(csv, "%s%s", i ? "," : "", headers[i]);
+    }
+    fprintf(csv, "\n");
+
+    int cnt = 0;
+    for (node *cur = db->head; cur; cur = cur->next) {
+        char buf[256];
+        fprintf(csv, "%d", cur->data.geo_id);
+        escape_csv_field(cur->data.geo_pos, buf, sizeof(buf));
+        fprintf(csv, ",%s", buf);
+        char date_str[32];
+        fmt_date(cur->data.mea_date, date_str, sizeof(date_str));
+        fprintf(csv, ",%s", date_str);
+        fprintf(csv, ",%d", cur->data.level);
+        char time_str[16];
+        fmt_time_of_day(cur->data.sunrise, time_str, sizeof(time_str));
+        fprintf(csv, ",%s", time_str);
+        fprintf(csv, ",%s", weather_str(cur->data.weather));
+        fmt_time_of_day(cur->data.sundown, time_str, sizeof(time_str));
+        fprintf(csv, ",%s\n", time_str);
+        cnt++;
+    }
+    fclose(csv);
+    out(f, "export: %d\n", cnt);
+}
+
+static const char* read_csv_field(const char *s, char *out, size_t out_size) {
+    out[0] = '\0';
+    if (!s) return NULL;
+    if (*s == '"') {
+        s++;
+        size_t pos = 0;
+        while (*s) {
+            if (*s == '"') {
+                s++;
+                if (*s == '"') {
+                    if (pos < out_size-1) out[pos++] = '"';
+                } else {
+                    break;
+                }
+            } else {
+                if (pos < out_size-1) out[pos++] = *s++;
+            }
+        }
+        out[pos] = '\0';
+        if (*s == ',') s++;
+        return s;
+    } else {
+        size_t pos = 0;
+        while (*s && *s != ',' && *s != '\n' && *s != '\r') {
+            if (pos < out_size-1) out[pos++] = *s++;
+        }
+        out[pos] = '\0';
+        if (*s == ',') s++;
+        return s;
+    }
+}
+
+static void cmd_import(const char *args, list *db, FILE *f) {
+    if (!args || !*args) {
+        out(f, "incorrect import\n");
+        return;
+    }
+    char filename[256];
+    if (sscanf(args, "%255s", filename) != 1) {
+        out(f, "incorrect import\n");
+        return;
+    }
+    FILE *csv = fopen(filename, "r");
+    if (!csv) {
+        out(f, "incorrect import\n");
+        return;
+    }
+    char header[4096];
+    if (!fgets(header, sizeof(header), csv)) {
+        fclose(csv);
+        out(f, "incorrect import\n");
+        return;
+    }
+    int count = 0;
+    char line[8192];
+    list new_db = {NULL, 0};
+    int error = 0;
+
+    while (fgets(line, sizeof(line), csv) && !error) {
+        line[strcspn(line, "\r\n")] = '\0';
+        if (strlen(line) == 0) continue;
+        const char *p = line;
+        char fields[7][256];
+        int idx = 0;
+        while (idx < 7 && p && *p) {
+            p = read_csv_field(p, fields[idx], sizeof(fields[idx]));
+            idx++;
+        }
+        if (idx != 7) { error = 1; break; }
+        weather_station ws;
+        memset(&ws, 0, sizeof(ws));
+        char *end; long n = strtol(fields[0], &end, 10);
+        if (*end != '\0') { error = 1; break; }
+        ws.geo_id = (int)n;
+        strncpy(ws.geo_pos, fields[1], MAX_NAME-1);
+        ws.geo_pos[MAX_NAME-1] = '\0';
+        if (!parse_date(fields[2], &ws.mea_date)) { error = 1; break; }
+        n = strtol(fields[3], &end, 10);
+        if (*end != '\0') { error = 1; break; }
+        ws.level = (int)n;
+        if (!parse_time_of_day(fields[4], &ws.sunrise)) { error = 1; break; }
+        if (!str_to_weather(fields[5], &ws.weather)) { error = 1; break; }
+        if (!parse_time_of_day(fields[6], &ws.sundown)) { error = 1; break; }
+        list_append(&new_db, &ws);
+        count++;
+    }
+
+    if (error) {
+        free_list(&new_db);
+        out(f, "incorrect import\n");
+    } else {
+        free_list(db);
+        db->head = new_db.head;
+        db->size = new_db.size;
+        out(f, "import: %d\n", count);
+    }
+    fclose(csv);
+}
+
+// ---------- execute_command ----------
 void execute_command(char *line, list *db, FILE *f) {
     char kw[32];
     if (sscanf(line, "%31s", kw) != 1) return;
@@ -465,6 +614,8 @@ void execute_command(char *line, list *db, FILE *f) {
     else if (!strcmp(kw,"delete")) cmd_delete(args, db, f);
     else if (!strcmp(kw,"update")) cmd_update(args, db, f);
     else if (!strcmp(kw,"uniq"))   cmd_uniq(args, db, f);
+    else if (!strcmp(kw,"export")) cmd_export(args, db, f);
+    else if (!strcmp(kw,"import")) cmd_import(args, db, f);
     else out(f, "incorrect %.20s\n", line);
 }
 

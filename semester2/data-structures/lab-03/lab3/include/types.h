@@ -1,4 +1,4 @@
-#ifndef _TYPES_H_
+﻿#ifndef _TYPES_H_
 #define _TYPES_H_
 
 #include <time.h>
@@ -21,6 +21,8 @@ typedef enum
     CMD_DELETE,
     CMD_UPDATE,
     CMD_UNIQ,
+    CMD_EXPORT,
+    CMD_IMPORT,
     CMD_UNKNOWN
 } command;
 
@@ -36,11 +38,11 @@ typedef struct
 {
     int geo_id;
     char geo_pos[MAX_NAME];
-    time_t mea_date;   // date only (time set to 00:00:00)
+    time_t mea_date;
     int level;
-    time_t sunrise;    // time only (date set to 1970-01-01)
+    time_t sunrise;
     weather_type weather;
-    time_t sundown;    // time only
+    time_t sundown;
 } weather_station;
 
 typedef struct node

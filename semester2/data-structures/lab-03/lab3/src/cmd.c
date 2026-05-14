@@ -1,4 +1,4 @@
-#include <stdio.h>
+﻿#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "../include/types.h"
@@ -13,5 +13,7 @@ command read_console(const char *line)
     if (strcmp(keyword, "delete") == 0) return CMD_DELETE;
     if (strcmp(keyword, "update") == 0) return CMD_UPDATE;
     if (strcmp(keyword, "uniq")   == 0) return CMD_UNIQ;
+    if (strcmp(keyword, "export") == 0) return CMD_EXPORT;
+    if (strcmp(keyword, "import") == 0) return CMD_IMPORT;
     return CMD_UNKNOWN;
-}   
+}
