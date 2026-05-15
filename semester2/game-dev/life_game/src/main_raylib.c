@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include <math.h>
+#include <stdarg.h>
 #include "raylib.h"
 #include "world.h"
 #include "patterns.h"
@@ -38,6 +39,36 @@ typedef enum {
     CAMPAIGN_PHASE_FAILED
 } CampaignPhase;
 
+// ========== ДИНАМИЧЕСКАЯ СТРУКТУРА ДЛЯ ИСТОРИИ ==========
+typedef struct HistoryNode {
+    int **world;
+    int generation;
+    struct HistoryNode *prev;
+    struct HistoryNode *next;
+} HistoryNode;
+
+typedef struct {
+    HistoryNode *head;
+    HistoryNode *current;
+    int width, height;
+} HistoryList;
+
+// ========== КНОПКИ ==========
+typedef struct {
+    Rectangle classic, campaign, about, help, exit;
+} MainMenuButtons;
+
+typedef struct {
+    Rectangle random, glider, blinker, clear, menu;
+} ClassicButtons;
+
+typedef struct {
+    Rectangle start, reset, autoSolve, menu;
+    Rectangle pause, menuSim;
+    Rectangle next, menuComplete;
+    Rectangle retry, menuFailed;
+} CampaignButtons;
+
 // ========== СОСТОЯНИЕ ==========
 typedef struct {
     GameMode gameMode;
@@ -47,27 +78,34 @@ typedef struct {
     float speed;
     float timeAccumulator;
     
-    // Классический режим
     int classicWorld[HEIGHT][WIDTH];
     int classicGeneration;
+    int classicDensity;
     
-    // Кампания
     Level *currentLevel;
     int **campaignWorld;
     int campaignGeneration;
     int startCellsPlaced;
     CampaignPhase campaignPhase;
-    bool levelCompleted;
     int currentLevelId;
     
+    HistoryList campaignHistory;
+    
     bool showMenu;
+    bool showAbout;
+    bool showHelp;
+    bool showDifficultyMenu;
+    
+    MainMenuButtons mainBtns;
+    ClassicButtons classicBtns;
+    CampaignButtons campaignBtns;
 } GameState;
 
 // ========== ПРОТОТИПЫ ==========
 void init_classic(GameState *state);
 void init_campaign(GameState *state, int levelId);
 void free_campaign(GameState *state);
-void draw_button(const char *text, int x, int y, int w, int h, bool hover, bool active);
+void draw_button(const char *text, Rectangle rect, bool hover, bool active);
 void draw_main_menu(GameState *state, Vector2 mouse);
 void draw_classic_ui(GameState *state, Vector2 mouse);
 void draw_campaign_ui(GameState *state, Vector2 mouse);
@@ -77,104 +115,234 @@ void handle_classic_input(GameState *state, Vector2 mouse);
 void handle_campaign_input(GameState *state, Vector2 mouse);
 void auto_solve_campaign(GameState *state);
 bool check_campaign_win(GameState *state);
+void history_init(HistoryList *list, int width, int height);
+void history_push(HistoryList *list, int **world, int generation);
+void history_undo(HistoryList *list, int **world, int *generation);
+void history_reset(HistoryList *list);
+void history_free(HistoryList *list);
+void log_event(const char *format, ...);
+void save_progress(int level);
+int load_progress();
 
-// ========== РЕАЛИЗАЦИЯ ==========
+// ========== ЛОГИРОВАНИЕ ==========
+void log_event(const char *format, ...) {
+    FILE *log = fopen("game.log", "a");
+    if (log) {
+        time_t now = time(NULL);
+        char *timestr = ctime(&now);
+        timestr[strlen(timestr)-1] = '\0';
+        fprintf(log, "[%s] ", timestr);
+        va_list args;
+        va_start(args, format);
+        vfprintf(log, format, args);
+        va_end(args);
+        fprintf(log, "\n");
+        fclose(log);
+    }
+}
 
+// ========== ПРОГРЕСС ==========
+void save_progress(int level) {
+    FILE *f = fopen("progress.dat", "w");
+    if (f) { fprintf(f, "%d\n", level); fclose(f); log_event("Progress saved (level %d)", level); }
+}
+int load_progress() {
+    int level = 1;
+    FILE *f = fopen("progress.dat", "r");
+    if (f) { fscanf(f, "%d", &level); fclose(f); }
+    if (level < 1) level = 1;
+    if (level > get_total_levels()) level = get_total_levels();
+    log_event("Progress loaded (level %d)", level);
+    return level;
+}
+
+// ========== ИСТОРИЯ ==========
+void history_init(HistoryList *list, int width, int height) {
+    list->head = list->current = NULL;
+    list->width = width; list->height = height;
+}
+void history_push(HistoryList *list, int **world, int generation) {
+    if (list->current && list->current->next) {
+        HistoryNode *tmp = list->current->next;
+        while (tmp) {
+            HistoryNode *next = tmp->next;
+            for (int i = 0; i < list->height; i++) free(tmp->world[i]);
+            free(tmp->world); free(tmp); tmp = next;
+        }
+        list->current->next = NULL;
+    }
+    HistoryNode *node = malloc(sizeof(HistoryNode));
+    node->world = malloc(list->height * sizeof(int*));
+    for (int i = 0; i < list->height; i++) {
+        node->world[i] = malloc(list->width * sizeof(int));
+        memcpy(node->world[i], world[i], list->width * sizeof(int));
+    }
+    node->generation = generation;
+    node->prev = list->current;
+    node->next = NULL;
+    if (!list->head) list->head = node;
+    if (list->current) list->current->next = node;
+    list->current = node;
+}
+void history_undo(HistoryList *list, int **world, int *generation) {
+    printf("Undo called, current=%p, prev=%p\n", (void*)list->current, (void*)(list->current ? list->current->prev : NULL));
+    if (list->current && list->current->prev) {
+        list->current = list->current->prev;
+        for (int i = 0; i < list->height; i++) {
+            memcpy(world[i], list->current->world[i], list->width * sizeof(int));
+        }
+        *generation = list->current->generation;
+        log_event("Undo performed");
+    } else {
+        log_event("Undo failed: no previous state");
+    }
+}
+void history_reset(HistoryList *list) {
+    HistoryNode *node = list->head;
+    while (node) {
+        HistoryNode *next = node->next;
+        for (int i = 0; i < list->height; i++) free(node->world[i]);
+        free(node->world); free(node); node = next;
+    }
+    list->head = list->current = NULL;
+}
+void history_free(HistoryList *list) { history_reset(list); }
+
+// ========== ИНИЦИАЛИЗАЦИЯ ==========
 void init_classic(GameState *state) {
-    pattern_random(state->classicWorld, 25);
+    pattern_random(state->classicWorld, state->classicDensity);
     state->classicGeneration = 0;
     state->paused = true;
     state->speed = 5.0f;
     state->timeAccumulator = 0.0f;
     state->showGrid = true;
-    int maxCellWidth = (GetScreenWidth() - PANEL_WIDTH) / WIDTH;
-    int maxCellHeight = GetScreenHeight() / HEIGHT;
-    state->cellSize = fmin(maxCellWidth, maxCellHeight);
+    int maxCellW = (GetScreenWidth() - PANEL_WIDTH) / WIDTH;
+    int maxCellH = GetScreenHeight() / HEIGHT;
+    state->cellSize = fmin(maxCellW, maxCellH);
     state->cellSize = fmax(MIN_CELL_SIZE, fmin(state->cellSize, MAX_CELL_SIZE));
+    log_event("Classic mode initialized with density %d", state->classicDensity);
 }
 
 void init_campaign(GameState *state, int levelId) {
     if (state->currentLevel) free_level(state->currentLevel);
     state->currentLevel = load_level(levelId);
     if (!state->currentLevel) {
-        printf("Failed to load level %d\n", levelId);
+        log_event("Failed to load level %d", levelId);
         state->showMenu = true;
         return;
     }
-    // Создаём мир для кампании
     if (state->campaignWorld) {
         for (int i = 0; i < state->currentLevel->height; i++) free(state->campaignWorld[i]);
         free(state->campaignWorld);
     }
     int h = state->currentLevel->height, w = state->currentLevel->width;
-    state->campaignWorld = (int**)malloc(h * sizeof(int*));
-    for (int i = 0; i < h; i++) {
-        state->campaignWorld[i] = (int*)calloc(w, sizeof(int));
-    }
+    state->campaignWorld = malloc(h * sizeof(int*));
+    for (int i = 0; i < h; i++) state->campaignWorld[i] = calloc(w, sizeof(int));
     state->campaignGeneration = 0;
     state->startCellsPlaced = 0;
     state->campaignPhase = CAMPAIGN_PHASE_PLACING;
-    state->levelCompleted = false;
     state->currentLevelId = levelId;
-    
-    // Размер клетки
-    int maxCellWidth = (GetScreenWidth() - PANEL_WIDTH) / w;
-    int maxCellHeight = GetScreenHeight() / h;
-    state->cellSize = fmin(maxCellWidth, maxCellHeight);
+    int maxCellW = (GetScreenWidth() - PANEL_WIDTH) / w;
+    int maxCellH = GetScreenHeight() / h;
+    state->cellSize = fmin(maxCellW, maxCellH);
     state->cellSize = fmax(MIN_CELL_SIZE, fmin(state->cellSize, MAX_CELL_SIZE));
+    history_init(&state->campaignHistory, w, h);
+    history_push(&state->campaignHistory, state->campaignWorld, state->campaignGeneration);
+    log_event("Campaign level %d started", levelId);
 }
 
 void free_campaign(GameState *state) {
     if (state->campaignWorld) {
         for (int i = 0; i < state->currentLevel->height; i++) free(state->campaignWorld[i]);
-        free(state->campaignWorld);
-        state->campaignWorld = NULL;
+        free(state->campaignWorld); state->campaignWorld = NULL;
     }
-    if (state->currentLevel) {
-        free_level(state->currentLevel);
-        state->currentLevel = NULL;
-    }
+    if (state->currentLevel) { free_level(state->currentLevel); state->currentLevel = NULL; }
+    history_free(&state->campaignHistory);
 }
 
-void draw_button(const char *text, int x, int y, int w, int h, bool hover, bool active) {
+// ========== ОТРИСОВКА КНОПКИ ==========
+void draw_button(const char *text, Rectangle rect, bool hover, bool active) {
     Color col = active ? COLOR_BUTTON_ACTIVE : (hover ? COLOR_BUTTON_HOVER : COLOR_BUTTON);
-    DrawRectangle(x, y, w, h, col);
-    DrawRectangleLines(x, y, w, h, LIGHTGRAY);
+    DrawRectangle(rect.x, rect.y, rect.width, rect.height, col);
+    DrawRectangleLines(rect.x, rect.y, rect.width, rect.height, LIGHTGRAY);
     int tw = MeasureText(text, 16);
-    DrawText(text, x + (w - tw)/2, y + (h - 16)/2, 16, WHITE);
+    DrawText(text, rect.x + (rect.width - tw)/2, rect.y + (rect.height - 16)/2, 16, WHITE);
 }
 
+// ========== ГЛАВНОЕ МЕНЮ ==========
 void draw_main_menu(GameState *state, Vector2 mouse) {
     ClearBackground(BLACK);
     int sw = GetScreenWidth(), sh = GetScreenHeight();
-    DrawText("CONWAY'S GAME OF LIFE", sw/2 - 200, 100, 30, WHITE);
+    DrawText("CONWAY'S GAME OF LIFE", sw/2 - 200, 80, 30, WHITE);
     
-    Rectangle classicBtn = { sw/2 - 100, 250, 200, 50 };
-    Rectangle campaignBtn = { sw/2 - 100, 330, 200, 50 };
-    bool classicHover = CheckCollisionPointRec(mouse, classicBtn);
-    bool campaignHover = CheckCollisionPointRec(mouse, campaignBtn);
-    draw_button("Classic Mode", classicBtn.x, classicBtn.y, classicBtn.width, classicBtn.height, classicHover, false);
-    draw_button("Campaign", campaignBtn.x, campaignBtn.y, campaignBtn.width, campaignBtn.height, campaignHover, false);
+    state->mainBtns.classic  = (Rectangle){ sw/2 - 100, 180, 200, 50 };
+    state->mainBtns.campaign = (Rectangle){ sw/2 - 100, 260, 200, 50 };
+    state->mainBtns.about    = (Rectangle){ sw/2 - 100, 340, 200, 50 };
+    state->mainBtns.help     = (Rectangle){ sw/2 - 100, 420, 200, 50 };
+    state->mainBtns.exit     = (Rectangle){ sw/2 - 100, 500, 200, 50 };
+    
+    draw_button("Classic Mode", state->mainBtns.classic,  CheckCollisionPointRec(mouse, state->mainBtns.classic), false);
+    draw_button("Campaign",    state->mainBtns.campaign, CheckCollisionPointRec(mouse, state->mainBtns.campaign), false);
+    draw_button("About",       state->mainBtns.about,    CheckCollisionPointRec(mouse, state->mainBtns.about), false);
+    draw_button("Help",        state->mainBtns.help,     CheckCollisionPointRec(mouse, state->mainBtns.help), false);
+    draw_button("Exit",        state->mainBtns.exit,     CheckCollisionPointRec(mouse, state->mainBtns.exit), false);
+    
+    if (state->showAbout) {
+        DrawRectangle(sw/2 - 250, sh/2 - 150, 500, 300, DARKGRAY);
+        DrawRectangleLines(sw/2 - 250, sh/2 - 150, 500, 300, WHITE);
+        DrawText("ABOUT", sw/2 - 40, sh/2 - 130, 24, YELLOW);
+        DrawText("Game of Life - Conway's Game with Barriers", sw/2 - 220, sh/2 - 90, 16, WHITE);
+        DrawText("Authors: Yuzhalkin P.A., Dubitsky D.A.", sw/2 - 220, sh/2 - 60, 16, WHITE);
+        DrawText("Group: 5131001/50601, Year: 2026", sw/2 - 220, sh/2 - 30, 16, WHITE);
+        DrawText("University: SPbPU, Institute: ICCS", sw/2 - 220, sh/2, 16, WHITE);
+        DrawText("Department: Computer Science", sw/2 - 220, sh/2 + 30, 16, WHITE);
+        DrawText("Click anywhere to close", sw/2 - 100, sh/2 + 90, 14, GRAY);
+    }
+    if (state->showHelp) {
+        DrawRectangle(sw/2 - 300, sh/2 - 200, 600, 400, DARKGRAY);
+        DrawRectangleLines(sw/2 - 300, sh/2 - 200, 600, 400, WHITE);
+        DrawText("HELP", sw/2 - 30, sh/2 - 170, 24, YELLOW);
+        DrawText("Classic mode:", sw/2 - 270, sh/2 - 130, 16, WHITE);
+        DrawText("Space - Pause/Play", sw/2 - 260, sh/2 - 100, 14, GRAY);
+        DrawText("Enter - Step (when paused)", sw/2 - 260, sh/2 - 80, 14, GRAY);
+        DrawText("+/- - Speed", sw/2 - 260, sh/2 - 60, 14, GRAY);
+        DrawText("G - Toggle grid", sw/2 - 260, sh/2 - 40, 14, GRAY);
+        DrawText("F1-F4 - Patterns", sw/2 - 260, sh/2 - 20, 14, GRAY);
+        DrawText("Left/Right mouse - draw/erase cells", sw/2 - 260, sh/2, 14, GRAY);
+        DrawText("Campaign mode:", sw/2 - 270, sh/2 + 30, 16, WHITE);
+        DrawText("Left click - place start cells", sw/2 - 260, sh/2 + 60, 14, GRAY);
+        DrawText("Right click - remove start cells", sw/2 - 260, sh/2 + 80, 14, GRAY);
+        DrawText("Start/Reset/AutoSolve - buttons on panel", sw/2 - 260, sh/2 + 100, 14, GRAY);
+        DrawText("Undo - Ctrl+Z", sw/2 - 260, sh/2 + 120, 14, GRAY);
+        DrawText("Click anywhere to close", sw/2 - 100, sh/2 + 180, 14, GRAY);
+    }
 }
 
 void handle_main_menu_input(GameState *state, Vector2 mouse) {
     if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-        int sw = GetScreenWidth(), sh = GetScreenHeight();
-        Rectangle classicBtn = { sw/2 - 100, 250, 200, 50 };
-        Rectangle campaignBtn = { sw/2 - 100, 330, 200, 50 };
-        if (CheckCollisionPointRec(mouse, classicBtn)) {
+        if (state->showAbout || state->showHelp) {
+            state->showAbout = false;
+            state->showHelp = false;
+            return;
+        }
+        if (CheckCollisionPointRec(mouse, state->mainBtns.classic)) {
             state->gameMode = GAME_MODE_CLASSIC;
-            init_classic(state);
+            state->showDifficultyMenu = true;
             state->showMenu = false;
         }
-        if (CheckCollisionPointRec(mouse, campaignBtn)) {
+        else if (CheckCollisionPointRec(mouse, state->mainBtns.campaign)) {
             state->gameMode = GAME_MODE_CAMPAIGN;
-            init_campaign(state, 1);
+            int startLevel = load_progress();
+            init_campaign(state, startLevel);
             state->showMenu = false;
         }
+        else if (CheckCollisionPointRec(mouse, state->mainBtns.about)) state->showAbout = true;
+        else if (CheckCollisionPointRec(mouse, state->mainBtns.help)) state->showHelp = true;
+        else if (CheckCollisionPointRec(mouse, state->mainBtns.exit)) CloseWindow();
     }
 }
 
+// ========== КЛАССИЧЕСКИЙ РЕЖИМ ==========
 void draw_classic_ui(GameState *state, Vector2 mouse) {
     int panelX = WIDTH * state->cellSize;
     DrawRectangle(panelX, 0, PANEL_WIDTH, GetScreenHeight(), COLOR_PANEL);
@@ -192,72 +360,73 @@ void draw_classic_ui(GameState *state, Vector2 mouse) {
     DrawText("Enter - Step", panelX + 30, y, 14, GRAY); y += 20;
     DrawText("+/- - Speed", panelX + 30, y, 14, GRAY); y += 20;
     DrawText("G - Grid", panelX + 30, y, 14, GRAY); y += 20;
-    DrawText("1-5 - Rules", panelX + 30, y, 14, GRAY); y += 20;
     DrawText("F1-F4 - Patterns", panelX + 30, y, 14, GRAY); y += 20;
+    DrawText("LMB/RMB - Draw/Erase", panelX + 30, y, 14, GRAY); y += 20;
+    y += 10;
     
-    // Кнопки паттернов
-    y += 20;
-    Rectangle randomBtn = { panelX + 20, y, 120, 30 };
-    Rectangle gliderBtn = { panelX + 150, y, 120, 30 };
+    state->classicBtns.random  = (Rectangle){ panelX + 20, y, 120, 30 };
+    state->classicBtns.glider  = (Rectangle){ panelX + 150, y, 120, 30 };
     y += 40;
-    Rectangle blinkerBtn = { panelX + 20, y, 120, 30 };
-    Rectangle clearBtn  = { panelX + 150, y, 120, 30 };
+    state->classicBtns.blinker = (Rectangle){ panelX + 20, y, 120, 30 };
+    state->classicBtns.clear   = (Rectangle){ panelX + 150, y, 120, 30 };
     y += 50;
-    Rectangle menuBtn = { panelX + 20, y, 260, 40 };
+    state->classicBtns.menu    = (Rectangle){ panelX + 20, y, 260, 40 };
     
-    bool randomH = CheckCollisionPointRec(mouse, randomBtn);
-    bool gliderH = CheckCollisionPointRec(mouse, gliderBtn);
-    bool blinkerH = CheckCollisionPointRec(mouse, blinkerBtn);
-    bool clearH = CheckCollisionPointRec(mouse, clearBtn);
-    bool menuH = CheckCollisionPointRec(mouse, menuBtn);
-    
-    draw_button("Random", randomBtn.x, randomBtn.y, randomBtn.width, randomBtn.height, randomH, false);
-    draw_button("Glider", gliderBtn.x, gliderBtn.y, gliderBtn.width, gliderBtn.height, gliderH, false);
-    draw_button("Blinker", blinkerBtn.x, blinkerBtn.y, blinkerBtn.width, blinkerBtn.height, blinkerH, false);
-    draw_button("Clear", clearBtn.x, clearBtn.y, clearBtn.width, clearBtn.height, clearH, false);
-    draw_button("Back to Menu", menuBtn.x, menuBtn.y, menuBtn.width, menuBtn.height, menuH, false);
-    
-    // Сохраняем кнопки в структуре или обрабатываем сразу здесь – в обработчике пересчитываем координаты
+    draw_button("Random",  state->classicBtns.random,  CheckCollisionPointRec(mouse, state->classicBtns.random), false);
+    draw_button("Glider",  state->classicBtns.glider,  CheckCollisionPointRec(mouse, state->classicBtns.glider), false);
+    draw_button("Blinker", state->classicBtns.blinker, CheckCollisionPointRec(mouse, state->classicBtns.blinker), false);
+    draw_button("Clear",   state->classicBtns.clear,   CheckCollisionPointRec(mouse, state->classicBtns.clear), false);
+    draw_button("Back to Menu", state->classicBtns.menu, CheckCollisionPointRec(mouse, state->classicBtns.menu), false);
 }
 
 void handle_classic_input(GameState *state, Vector2 mouse) {
-    int panelX = WIDTH * state->cellSize;
-    int y = 20;
-    // вычисляем координаты кнопок (аналогично draw)
-    y += 35 + 25*3 + 40 + 25*6 + 20; // пролистывание до кнопок паттернов
-    Rectangle randomBtn = { panelX + 20, y, 120, 30 };
-    Rectangle gliderBtn = { panelX + 150, y, 120, 30 };
-    y += 40;
-    Rectangle blinkerBtn = { panelX + 20, y, 120, 30 };
-    Rectangle clearBtn  = { panelX + 150, y, 120, 30 };
-    y += 50;
-    Rectangle menuBtn = { panelX + 20, y, 260, 40 };
-    
-    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-        if (CheckCollisionPointRec(mouse, randomBtn)) {
-            pattern_random(state->classicWorld, 25);
-            state->classicGeneration = 0;
-        }
-        if (CheckCollisionPointRec(mouse, gliderBtn)) {
-            for (int i=0;i<HEIGHT;i++) for (int j=0;j<WIDTH;j++) state->classicWorld[i][j]=0;
-            pattern_glider(state->classicWorld, HEIGHT/2, WIDTH/2);
-            state->classicGeneration = 0;
-        }
-        if (CheckCollisionPointRec(mouse, blinkerBtn)) {
-            for (int i=0;i<HEIGHT;i++) for (int j=0;j<WIDTH;j++) state->classicWorld[i][j]=0;
-            pattern_blinker(state->classicWorld, HEIGHT/2, WIDTH/2-1);
-            state->classicGeneration = 0;
-        }
-        if (CheckCollisionPointRec(mouse, clearBtn)) {
-            for (int i=0;i<HEIGHT;i++) for (int j=0;j<WIDTH;j++) state->classicWorld[i][j]=0;
-            state->classicGeneration = 0;
-        }
-        if (CheckCollisionPointRec(mouse, menuBtn)) {
-            state->showMenu = true;
-            state->gameMode = GAME_MODE_CLASSIC; // не важно
+    // Мышь для рисования на поле
+    int gameW = WIDTH * state->cellSize;
+    int gameH = HEIGHT * state->cellSize;
+    if (mouse.x >= 0 && mouse.x < gameW && mouse.y >= 0 && mouse.y < gameH) {
+        int x = mouse.x / state->cellSize;
+        int y = mouse.y / state->cellSize;
+        if (x >= 0 && x < WIDTH && y >= 0 && y < HEIGHT) {
+            if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
+                state->classicWorld[y][x] = 1;
+                // не сохраняем в историю для классики (просто рисуем)
+            }
+            if (IsMouseButtonDown(MOUSE_RIGHT_BUTTON)) {
+                state->classicWorld[y][x] = 0;
+            }
         }
     }
-    // Клавиатурные команды (пробел, +/-, G, Enter, 1-5, F1-F4)
+    
+    // Кнопки
+    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        if (CheckCollisionPointRec(mouse, state->classicBtns.random)) {
+            pattern_random(state->classicWorld, state->classicDensity);
+            state->classicGeneration = 0;
+            log_event("Random pattern in classic mode");
+        }
+        else if (CheckCollisionPointRec(mouse, state->classicBtns.glider)) {
+            memset(state->classicWorld, 0, sizeof(state->classicWorld));
+            pattern_glider(state->classicWorld, HEIGHT/2, WIDTH/2);
+            state->classicGeneration = 0;
+            log_event("Glider pattern");
+        }
+        else if (CheckCollisionPointRec(mouse, state->classicBtns.blinker)) {
+            memset(state->classicWorld, 0, sizeof(state->classicWorld));
+            pattern_blinker(state->classicWorld, HEIGHT/2, WIDTH/2-1);
+            state->classicGeneration = 0;
+            log_event("Blinker pattern");
+        }
+        else if (CheckCollisionPointRec(mouse, state->classicBtns.clear)) {
+            memset(state->classicWorld, 0, sizeof(state->classicWorld));
+            state->classicGeneration = 0;
+            log_event("Cleared world");
+        }
+        else if (CheckCollisionPointRec(mouse, state->classicBtns.menu)) {
+            state->showMenu = true;
+            log_event("Return to menu from classic");
+        }
+    }
+    // Клавиатура
     if (IsKeyPressed(KEY_SPACE)) state->paused = !state->paused;
     if (IsKeyPressed(KEY_ENTER) && state->paused) {
         next_generation(state->classicWorld);
@@ -267,52 +436,24 @@ void handle_classic_input(GameState *state, Vector2 mouse) {
     if (IsKeyPressed(KEY_KP_SUBTRACT) || IsKeyPressed(KEY_MINUS)) state->speed = fmax(1, state->speed-1);
     if (IsKeyPressed(KEY_G)) state->showGrid = !state->showGrid;
     if (IsKeyPressed(KEY_C)) {
-        for (int i=0;i<HEIGHT;i++) for (int j=0;j<WIDTH;j++) state->classicWorld[i][j]=0;
+        memset(state->classicWorld, 0, sizeof(state->classicWorld));
         state->classicGeneration = 0;
     }
-    if (IsKeyPressed(KEY_R)) pattern_random(state->classicWorld, 25);
-    // Правила (1-5) – в классике используем стандартные, показываем но не меняем
-    // Паттерны F1-F4
-    if (IsKeyPressed(KEY_F1)) {
-        pattern_random(state->classicWorld, 25);
-        state->classicGeneration = 0;
-    }
+    if (IsKeyPressed(KEY_R)) pattern_random(state->classicWorld, state->classicDensity);
+    if (IsKeyPressed(KEY_F1)) pattern_random(state->classicWorld, state->classicDensity);
     if (IsKeyPressed(KEY_F2)) {
-        for (int i=0;i<HEIGHT;i++) for (int j=0;j<WIDTH;j++) state->classicWorld[i][j]=0;
+        memset(state->classicWorld, 0, sizeof(state->classicWorld));
         pattern_glider(state->classicWorld, HEIGHT/2, WIDTH/2);
         state->classicGeneration = 0;
     }
     if (IsKeyPressed(KEY_F3)) {
-        for (int i=0;i<HEIGHT;i++) for (int j=0;j<WIDTH;j++) state->classicWorld[i][j]=0;
+        memset(state->classicWorld, 0, sizeof(state->classicWorld));
         pattern_blinker(state->classicWorld, HEIGHT/2, WIDTH/2-1);
         state->classicGeneration = 0;
     }
 }
 
-void draw_barriers(Barriers *b, int cellSize, int offsetX, int offsetY) {
-    if (!b) return;
-    for (int y = 0; y < b->height; y++) {
-        for (int x = 0; x < b->width - 1; x++) {
-            if (has_h_barrier(b, y, x)) {
-                int x1 = offsetX + (x+1)*cellSize;
-                int y1 = offsetY + y*cellSize + cellSize/2;
-                int x2 = x1, y2 = y1;
-                DrawLine(x1, y1, x2, y2, COLOR_BARRIER);
-            }
-        }
-    }
-    for (int y = 0; y < b->height - 1; y++) {
-        for (int x = 0; x < b->width; x++) {
-            if (has_v_barrier(b, y, x)) {
-                int x1 = offsetX + x*cellSize + cellSize/2;
-                int y1 = offsetY + (y+1)*cellSize;
-                int x2 = x1, y2 = y1;
-                DrawLine(x1, y1, x2, y2, COLOR_BARRIER);
-            }
-        }
-    }
-}
-
+// ========== КАМПАНИЯ ==========
 void draw_campaign_ui(GameState *state, Vector2 mouse) {
     if (!state->currentLevel) return;
     int w = state->currentLevel->width, h = state->currentLevel->height;
@@ -330,48 +471,39 @@ void draw_campaign_ui(GameState *state, Vector2 mouse) {
     
     if (state->campaignPhase == CAMPAIGN_PHASE_PLACING) {
         DrawText("PHASE: PLACE CELLS", panelX + 20, y, 16, WHITE); y += 30;
-        Rectangle startBtn = { panelX + 20, y, 120, 35 };
-        Rectangle resetBtn = { panelX + 150, y, 120, 35 };
+        state->campaignBtns.start     = (Rectangle){ panelX + 20, y, 120, 35 };
+        state->campaignBtns.reset     = (Rectangle){ panelX + 150, y, 120, 35 };
         y += 45;
-        Rectangle autoBtn = { panelX + 20, y, 260, 35 };
+        state->campaignBtns.autoSolve = (Rectangle){ panelX + 20, y, 260, 35 };
         y += 50;
-        Rectangle menuBtn = { panelX + 20, y, 260, 40 };
+        state->campaignBtns.menu      = (Rectangle){ panelX + 20, y, 260, 40 };
         
-        bool startH = CheckCollisionPointRec(mouse, startBtn);
-        bool resetH = CheckCollisionPointRec(mouse, resetBtn);
-        bool autoH = CheckCollisionPointRec(mouse, autoBtn);
-        bool menuH = CheckCollisionPointRec(mouse, menuBtn);
-        draw_button("Start", startBtn.x, startBtn.y, startBtn.width, startBtn.height, startH, false);
-        draw_button("Reset", resetBtn.x, resetBtn.y, resetBtn.width, resetBtn.height, resetH, false);
-        draw_button("Auto Solve", autoBtn.x, autoBtn.y, autoBtn.width, autoBtn.height, autoH, false);
-        draw_button("Back to Menu", menuBtn.x, menuBtn.y, menuBtn.width, menuBtn.height, menuH, false);
-    } else if (state->campaignPhase == CAMPAIGN_PHASE_SIMULATING) {
+        draw_button("Start",     state->campaignBtns.start,     CheckCollisionPointRec(mouse, state->campaignBtns.start), false);
+        draw_button("Reset",     state->campaignBtns.reset,     CheckCollisionPointRec(mouse, state->campaignBtns.reset), false);
+        draw_button("Auto Solve",state->campaignBtns.autoSolve, CheckCollisionPointRec(mouse, state->campaignBtns.autoSolve), false);
+        draw_button("Back to Menu", state->campaignBtns.menu,   CheckCollisionPointRec(mouse, state->campaignBtns.menu), false);
+    }
+    else if (state->campaignPhase == CAMPAIGN_PHASE_SIMULATING) {
         DrawText("PHASE: SIMULATING", panelX + 20, y, 16, WHITE); y += 30;
-        Rectangle pauseBtn = { panelX + 20, y, 120, 35 };
+        state->campaignBtns.pause    = (Rectangle){ panelX + 20, y, 120, 35 };
         y += 45;
-        Rectangle menuBtn = { panelX + 20, y, 260, 40 };
-        bool pauseH = CheckCollisionPointRec(mouse, pauseBtn);
-        bool menuH = CheckCollisionPointRec(mouse, menuBtn);
-        draw_button(state->paused ? "Run" : "Pause", pauseBtn.x, pauseBtn.y, pauseBtn.width, pauseBtn.height, pauseH, false);
-        draw_button("Back to Menu", menuBtn.x, menuBtn.y, menuBtn.width, menuBtn.height, menuH, false);
-    } else if (state->campaignPhase == CAMPAIGN_PHASE_COMPLETE) {
+        state->campaignBtns.menuSim  = (Rectangle){ panelX + 20, y, 260, 40 };
+        draw_button(state->paused ? "Run" : "Pause", state->campaignBtns.pause, CheckCollisionPointRec(mouse, state->campaignBtns.pause), false);
+        draw_button("Back to Menu", state->campaignBtns.menuSim, CheckCollisionPointRec(mouse, state->campaignBtns.menuSim), false);
+    }
+    else if (state->campaignPhase == CAMPAIGN_PHASE_COMPLETE) {
         DrawText("LEVEL COMPLETE!", panelX + 20, y, 20, GREEN); y += 40;
-        Rectangle nextBtn = { panelX + 20, y, 120, 35 };
-        Rectangle menuBtn = { panelX + 150, y, 120, 35 };
-        y += 50;
-        bool nextH = CheckCollisionPointRec(mouse, nextBtn);
-        bool menuH = CheckCollisionPointRec(mouse, menuBtn);
-        draw_button("Next Level", nextBtn.x, nextBtn.y, nextBtn.width, nextBtn.height, nextH, false);
-        draw_button("Menu", menuBtn.x, menuBtn.y, menuBtn.width, menuBtn.height, menuH, false);
-    } else if (state->campaignPhase == CAMPAIGN_PHASE_FAILED) {
+        state->campaignBtns.next      = (Rectangle){ panelX + 20, y, 120, 35 };
+        state->campaignBtns.menuComplete = (Rectangle){ panelX + 150, y, 120, 35 };
+        draw_button("Next Level", state->campaignBtns.next, CheckCollisionPointRec(mouse, state->campaignBtns.next), false);
+        draw_button("Menu", state->campaignBtns.menuComplete, CheckCollisionPointRec(mouse, state->campaignBtns.menuComplete), false);
+    }
+    else if (state->campaignPhase == CAMPAIGN_PHASE_FAILED) {
         DrawText("FAILED! Try again.", panelX + 20, y, 20, RED); y += 40;
-        Rectangle retryBtn = { panelX + 20, y, 120, 35 };
-        Rectangle menuBtn = { panelX + 150, y, 120, 35 };
-        y += 50;
-        bool retryH = CheckCollisionPointRec(mouse, retryBtn);
-        bool menuH = CheckCollisionPointRec(mouse, menuBtn);
-        draw_button("Retry", retryBtn.x, retryBtn.y, retryBtn.width, retryBtn.height, retryH, false);
-        draw_button("Menu", menuBtn.x, menuBtn.y, menuBtn.width, menuBtn.height, menuH, false);
+        state->campaignBtns.retry     = (Rectangle){ panelX + 20, y, 120, 35 };
+        state->campaignBtns.menuFailed = (Rectangle){ panelX + 150, y, 120, 35 };
+        draw_button("Retry", state->campaignBtns.retry, CheckCollisionPointRec(mouse, state->campaignBtns.retry), false);
+        draw_button("Menu", state->campaignBtns.menuFailed, CheckCollisionPointRec(mouse, state->campaignBtns.menuFailed), false);
     }
 }
 
@@ -379,97 +511,104 @@ void handle_campaign_input(GameState *state, Vector2 mouse) {
     if (!state->currentLevel) return;
     int w = state->currentLevel->width, h = state->currentLevel->height;
     int panelX = w * state->cellSize;
-    int y = 20;
-    // Для всех фаз кнопки расположены по-разному, вычислим их динамически
+    
+    // Рисование мышью (только в фазе размещения)
     if (state->campaignPhase == CAMPAIGN_PHASE_PLACING) {
-        y += 30+25*4+35; // после заголовка и статов
-        Rectangle startBtn = { panelX + 20, y, 120, 35 };
-        Rectangle resetBtn = { panelX + 150, y, 120, 35 };
-        y += 45;
-        Rectangle autoBtn = { panelX + 20, y, 260, 35 };
-        y += 50;
-        Rectangle menuBtn = { panelX + 20, y, 260, 40 };
-        
-        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-            if (CheckCollisionPointRec(mouse, startBtn)) {
-                if (state->startCellsPlaced <= state->currentLevel->max_start_cells && state->startCellsPlaced > 0) {
-                    state->campaignPhase = CAMPAIGN_PHASE_SIMULATING;
-                    state->paused = false;
+        int gameW = w * state->cellSize;
+        int gameH = h * state->cellSize;
+        if (mouse.x >= 0 && mouse.x < gameW && mouse.y >= 0 && mouse.y < gameH) {
+            int x = mouse.x / state->cellSize;
+            int y = mouse.y / state->cellSize;
+            if (x >= 0 && x < w && y >= 0 && y < h) {
+                if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && state->campaignWorld[y][x] == 0 && state->startCellsPlaced < state->currentLevel->max_start_cells) {
+                    state->campaignWorld[y][x] = 1;
+                    state->startCellsPlaced++;
+                    history_push(&state->campaignHistory, state->campaignWorld, state->campaignGeneration);
+                }
+                if (IsMouseButtonPressed(MOUSE_RIGHT_BUTTON) && state->campaignWorld[y][x] == 1) {
+                    state->campaignWorld[y][x] = 0;
+                    state->startCellsPlaced--;
+                    history_push(&state->campaignHistory, state->campaignWorld, state->campaignGeneration);
                 }
             }
-            if (CheckCollisionPointRec(mouse, resetBtn)) {
+        }
+    }
+    
+    // Кнопки
+    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        if (state->campaignPhase == CAMPAIGN_PHASE_PLACING) {
+            if (CheckCollisionPointRec(mouse, state->campaignBtns.start) && state->startCellsPlaced > 0) {
+                state->campaignPhase = CAMPAIGN_PHASE_SIMULATING;
+                state->paused = false;
+                log_event("Campaign simulation started");
+            }
+            else if (CheckCollisionPointRec(mouse, state->campaignBtns.reset)) {
                 for (int i=0;i<h;i++) for (int j=0;j<w;j++) state->campaignWorld[i][j] = 0;
                 state->startCellsPlaced = 0;
                 state->campaignGeneration = 0;
+                history_reset(&state->campaignHistory);
+                history_push(&state->campaignHistory, state->campaignWorld, state->campaignGeneration);
+                log_event("Campaign level reset");
             }
-            if (CheckCollisionPointRec(mouse, autoBtn)) {
+            else if (CheckCollisionPointRec(mouse, state->campaignBtns.autoSolve)) {
                 auto_solve_campaign(state);
+                log_event("Auto solve used");
             }
-            if (CheckCollisionPointRec(mouse, menuBtn)) {
+            else if (CheckCollisionPointRec(mouse, state->campaignBtns.menu)) {
+                free_campaign(state);
+                state->showMenu = true;
+                log_event("Return to menu from campaign");
+            }
+        }
+        else if (state->campaignPhase == CAMPAIGN_PHASE_SIMULATING) {
+            if (CheckCollisionPointRec(mouse, state->campaignBtns.pause)) state->paused = !state->paused;
+            else if (CheckCollisionPointRec(mouse, state->campaignBtns.menuSim)) {
+                free_campaign(state);
+                state->showMenu = true;
+                log_event("Return to menu during simulation");
+            }
+        }
+        else if (state->campaignPhase == CAMPAIGN_PHASE_COMPLETE) {
+            if (CheckCollisionPointRec(mouse, state->campaignBtns.next)) {
+                int nextLevel = state->currentLevelId + 1;
+                if (nextLevel <= get_total_levels()) {
+                    save_progress(nextLevel);
+                    init_campaign(state, nextLevel);
+                    log_event("Advanced to next level");
+                } else {
+                    log_event("Campaign completed");
+                    state->showMenu = true;
+                }
+            }
+            else if (CheckCollisionPointRec(mouse, state->campaignBtns.menuComplete)) {
                 free_campaign(state);
                 state->showMenu = true;
             }
         }
-        // Размещение клеток мышью
-        int gameWidth = w * state->cellSize, gameHeight = h * state->cellSize;
-        if (mouse.x < gameWidth && mouse.y < gameHeight && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-            int x = mouse.x / state->cellSize, y = mouse.y / state->cellSize;
-            if (x>=0 && x<w && y>=0 && y<h && state->campaignWorld[y][x]==0 && state->startCellsPlaced < state->currentLevel->max_start_cells) {
-                state->campaignWorld[y][x] = 1;
-                state->startCellsPlaced++;
+        else if (state->campaignPhase == CAMPAIGN_PHASE_FAILED) {
+            if (CheckCollisionPointRec(mouse, state->campaignBtns.retry)) {
+                init_campaign(state, state->currentLevelId);
+                log_event("Retry level");
             }
-        }
-    } else if (state->campaignPhase == CAMPAIGN_PHASE_SIMULATING) {
-        y += 30+25*4+35;
-        Rectangle pauseBtn = { panelX + 20, y, 120, 35 };
-        y += 45;
-        Rectangle menuBtn = { panelX + 20, y, 260, 40 };
-        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-            if (CheckCollisionPointRec(mouse, pauseBtn)) state->paused = !state->paused;
-            if (CheckCollisionPointRec(mouse, menuBtn)) {
+            else if (CheckCollisionPointRec(mouse, state->campaignBtns.menuFailed)) {
                 free_campaign(state);
                 state->showMenu = true;
             }
         }
-        // Клавиатурные команды в симуляции
+    }
+    
+    // Клавиатура для симуляции
+    if (state->campaignPhase == CAMPAIGN_PHASE_SIMULATING) {
         if (IsKeyPressed(KEY_SPACE)) state->paused = !state->paused;
         if (IsKeyPressed(KEY_ENTER) && state->paused) {
             next_generation_with_barriers(state->campaignWorld, state->currentLevel->barriers, w, h, &state->campaignGeneration);
+            history_push(&state->campaignHistory, state->campaignWorld, state->campaignGeneration);
         }
         if (IsKeyPressed(KEY_KP_ADD) || IsKeyPressed(KEY_EQUAL)) state->speed = fmin(30, state->speed+1);
         if (IsKeyPressed(KEY_KP_SUBTRACT) || IsKeyPressed(KEY_MINUS)) state->speed = fmax(1, state->speed-1);
         if (IsKeyPressed(KEY_G)) state->showGrid = !state->showGrid;
-    } else if (state->campaignPhase == CAMPAIGN_PHASE_COMPLETE) {
-        y += 30+25*4+35+40;
-        Rectangle nextBtn = { panelX + 20, y, 120, 35 };
-        Rectangle menuBtn = { panelX + 150, y, 120, 35 };
-        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-            if (CheckCollisionPointRec(mouse, nextBtn)) {
-                int nextLevel = state->currentLevelId + 1;
-                if (nextLevel <= get_total_levels()) {
-                    init_campaign(state, nextLevel);
-                } else {
-                    // Все уровни пройдены
-                    state->showMenu = true;
-                }
-            }
-            if (CheckCollisionPointRec(mouse, menuBtn)) {
-                free_campaign(state);
-                state->showMenu = true;
-            }
-        }
-    } else if (state->campaignPhase == CAMPAIGN_PHASE_FAILED) {
-        y += 30+25*4+35+40;
-        Rectangle retryBtn = { panelX + 20, y, 120, 35 };
-        Rectangle menuBtn = { panelX + 150, y, 120, 35 };
-        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-            if (CheckCollisionPointRec(mouse, retryBtn)) {
-                init_campaign(state, state->currentLevelId); // рестарт уровня
-            }
-            if (CheckCollisionPointRec(mouse, menuBtn)) {
-                free_campaign(state);
-                state->showMenu = true;
-            }
+        if (IsKeyPressed(KEY_Z) && (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL))) {
+            history_undo(&state->campaignHistory, state->campaignWorld, &state->campaignGeneration);
         }
     }
 }
@@ -478,10 +617,8 @@ void auto_solve_campaign(GameState *state) {
     if (state->campaignPhase != CAMPAIGN_PHASE_PLACING) return;
     int w = state->currentLevel->width, h = state->currentLevel->height;
     int maxCells = state->currentLevel->max_start_cells;
-    // Очистить поле
     for (int i=0;i<h;i++) for (int j=0;j<w;j++) state->campaignWorld[i][j] = 0;
     state->startCellsPlaced = 0;
-    // Простая стратегия: выбрать случайные клетки, не слишком близко
     int attempts = 0;
     while (state->startCellsPlaced < maxCells && attempts < 1000) {
         int x = rand() % w, y = rand() % h;
@@ -491,18 +628,48 @@ void auto_solve_campaign(GameState *state) {
         }
         attempts++;
     }
+    history_reset(&state->campaignHistory);
+    history_push(&state->campaignHistory, state->campaignWorld, state->campaignGeneration);
 }
 
 bool check_campaign_win(GameState *state) {
     int w = state->currentLevel->width, h = state->currentLevel->height;
-    for (int y=0; y<h; y++)
-        for (int x=0; x<w; x++)
-            if (state->campaignWorld[y][x] == 0) return false;
+    for (int y=0; y<h; y++) for (int x=0; x<w; x++) if (state->campaignWorld[y][x] == 0) return false;
     return true;
 }
 
+void draw_barriers(Barriers *b, int cellSize, int offsetX, int offsetY) {
+    if (!b) return;
+    for (int y = 0; y < b->height; y++) {
+        for (int x = 0; x < b->width - 1; x++) {
+            if (has_h_barrier(b, y, x))
+                DrawLine(offsetX + (x+1)*cellSize, offsetY + y*cellSize + cellSize/2,
+                         offsetX + (x+1)*cellSize, offsetY + y*cellSize + cellSize/2, COLOR_BARRIER);
+        }
+    }
+    for (int y = 0; y < b->height - 1; y++) {
+        for (int x = 0; x < b->width; x++) {
+            if (has_v_barrier(b, y, x))
+                DrawLine(offsetX + x*cellSize + cellSize/2, offsetY + (y+1)*cellSize,
+                         offsetX + x*cellSize + cellSize/2, offsetY + (y+1)*cellSize, COLOR_BARRIER);
+        }
+    }
+}
+
 // ========== MAIN ==========
-int main() {
+int main(int argc, char *argv[]) {
+    if (argc > 1) {
+        if (strcmp(argv[1], "--help") == 0) {
+            printf("Game of Life - Conway's Game with barriers and campaign\n");
+            printf("Usage: game.exe [--help] [--version]\n");
+            return 0;
+        }
+        if (strcmp(argv[1], "--version") == 0) {
+            printf("Game of Life v2.0 (c) 2026\n");
+            printf("Authors: Yuzhalkin P.A., Dubitsky D.A.\n");
+            return 0;
+        }
+    }
     srand(time(NULL));
     int screenWidth = 1300, screenHeight = 800;
     InitWindow(screenWidth, screenHeight, "Game of Life - Adventure");
@@ -510,18 +677,46 @@ int main() {
     
     GameState state = {0};
     state.showMenu = true;
-    state.gameMode = GAME_MODE_CLASSIC;
+    state.classicDensity = 25;
+    
+    log_event("Program started");
     
     while (!WindowShouldClose()) {
         float dt = GetFrameTime();
         Vector2 mouse = GetMousePosition();
         
+        BeginDrawing();
+        ClearBackground(BLACK);
+        
         if (state.showMenu) {
             draw_main_menu(&state, mouse);
             handle_main_menu_input(&state, mouse);
+        } else if (state.showDifficultyMenu) {
+            int sw = GetScreenWidth(), sh = GetScreenHeight();
+            DrawRectangle(sw/2 - 200, sh/2 - 100, 400, 200, DARKGRAY);
+            DrawRectangleLines(sw/2 - 200, sh/2 - 100, 400, 200, WHITE);
+            DrawText("Select Difficulty", sw/2 - 100, sh/2 - 70, 20, YELLOW);
+            Rectangle easy   = { sw/2 - 150, sh/2 - 30, 100, 40 };
+            Rectangle medium = { sw/2 - 50,  sh/2 - 30, 100, 40 };
+            Rectangle hard   = { sw/2 + 50,  sh/2 - 30, 100, 40 };
+            bool easyH = CheckCollisionPointRec(mouse, easy);
+            bool medH  = CheckCollisionPointRec(mouse, medium);
+            bool hardH = CheckCollisionPointRec(mouse, hard);
+            draw_button("15%", easy,   easyH, state.classicDensity==15);
+            draw_button("25%", medium, medH,  state.classicDensity==25);
+            draw_button("40%", hard,   hardH, state.classicDensity==40);
+            if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+                if (easyH) state.classicDensity = 15;
+                else if (medH) state.classicDensity = 25;
+                else if (hardH) state.classicDensity = 40;
+                if (easyH || medH || hardH) {
+                    init_classic(&state);
+                    state.showDifficultyMenu = false;
+                    state.showMenu = false;
+                }
+            }
         } else {
             if (state.gameMode == GAME_MODE_CLASSIC) {
-                // Обновление классического режима
                 if (!state.paused) {
                     state.timeAccumulator += dt;
                     float step = 1.0f / state.speed;
@@ -531,67 +726,62 @@ int main() {
                         state.timeAccumulator -= step;
                     }
                 }
-                // Отрисовка поля
-                int gameWidth = WIDTH * state.cellSize, gameHeight = HEIGHT * state.cellSize;
+                int gameW = WIDTH * state.cellSize, gameH = HEIGHT * state.cellSize;
                 for (int y=0; y<HEIGHT; y++)
-                    for (int x=0; x<WIDTH; x++) {
-                        Color col = state.classicWorld[y][x] ? COLOR_ALIVE : COLOR_DEAD;
-                        DrawRectangle(x*state.cellSize, y*state.cellSize, state.cellSize, state.cellSize, col);
-                    }
+                    for (int x=0; x<WIDTH; x++)
+                        DrawRectangle(x*state.cellSize, y*state.cellSize, state.cellSize, state.cellSize,
+                                      state.classicWorld[y][x] ? COLOR_ALIVE : COLOR_DEAD);
                 if (state.showGrid) {
-                    for (int i=0;i<=WIDTH;i++) DrawLine(i*state.cellSize,0,i*state.cellSize, gameHeight, COLOR_GRID);
-                    for (int i=0;i<=HEIGHT;i++) DrawLine(0,i*state.cellSize, gameWidth, i*state.cellSize, COLOR_GRID);
+                    for (int i=0;i<=WIDTH;i++) DrawLine(i*state.cellSize, 0, i*state.cellSize, gameH, COLOR_GRID);
+                    for (int i=0;i<=HEIGHT;i++) DrawLine(0, i*state.cellSize, gameW, i*state.cellSize, COLOR_GRID);
                 }
                 draw_classic_ui(&state, mouse);
                 handle_classic_input(&state, mouse);
             } else if (state.gameMode == GAME_MODE_CAMPAIGN && state.currentLevel) {
                 int w = state.currentLevel->width, h = state.currentLevel->height;
-                int gameWidth = w * state.cellSize, gameHeight = h * state.cellSize;
-                // Отрисовка поля
+                int gameW = w * state.cellSize, gameH = h * state.cellSize;
                 for (int y=0; y<h; y++)
-                    for (int x=0; x<w; x++) {
-                        Color col = state.campaignWorld[y][x] ? COLOR_ALIVE : COLOR_DEAD;
-                        DrawRectangle(x*state.cellSize, y*state.cellSize, state.cellSize, state.cellSize, col);
-                    }
+                    for (int x=0; x<w; x++)
+                        DrawRectangle(x*state.cellSize, y*state.cellSize, state.cellSize, state.cellSize,
+                                      state.campaignWorld[y][x] ? COLOR_ALIVE : COLOR_DEAD);
                 if (state.showGrid) {
-                    for (int i=0;i<=w;i++) DrawLine(i*state.cellSize,0,i*state.cellSize, gameHeight, COLOR_GRID);
-                    for (int i=0;i<=h;i++) DrawLine(0,i*state.cellSize, gameWidth, i*state.cellSize, COLOR_GRID);
+                    for (int i=0;i<=w;i++) DrawLine(i*state.cellSize, 0, i*state.cellSize, gameH, COLOR_GRID);
+                    for (int i=0;i<=h;i++) DrawLine(0, i*state.cellSize, gameW, i*state.cellSize, COLOR_GRID);
                 }
                 draw_barriers(state.currentLevel->barriers, state.cellSize, 0, 0);
-                
                 draw_campaign_ui(&state, mouse);
                 handle_campaign_input(&state, mouse);
                 
-                // Симуляция
                 if (state.campaignPhase == CAMPAIGN_PHASE_SIMULATING && !state.paused) {
                     state.timeAccumulator += dt;
                     float step = 1.0f / state.speed;
                     while (state.timeAccumulator >= step) {
                         next_generation_with_barriers(state.campaignWorld, state.currentLevel->barriers, w, h, &state.campaignGeneration);
+                        history_push(&state.campaignHistory, state.campaignWorld, state.campaignGeneration);
                         state.timeAccumulator -= step;
-                        // Проверка победы
                         if (check_campaign_win(&state)) {
                             state.campaignPhase = CAMPAIGN_PHASE_COMPLETE;
                             state.paused = true;
+                            int next = state.currentLevelId + 1;
+                            if (next <= get_total_levels()) save_progress(next);
+                            log_event("Level %d completed", state.currentLevelId);
                             break;
                         }
                         if (state.campaignGeneration >= state.currentLevel->target_generations) {
                             state.campaignPhase = CAMPAIGN_PHASE_FAILED;
                             state.paused = true;
+                            log_event("Level %d failed", state.currentLevelId);
                             break;
                         }
                     }
                 }
             }
         }
-        
-        BeginDrawing();
-        ClearBackground(BLACK);
-        // Всё уже нарисовано внутри веток
         EndDrawing();
     }
     
     free_campaign(&state);
     CloseWindow();
+    log_event("Program closed");
     return 0;
 }

@@ -1,17 +1,24 @@
 #include "barriers.h"
 #include <stdlib.h>
-#include <string.h>
 
 Barriers* create_barriers(int width, int height) {
     Barriers *b = (Barriers*)malloc(sizeof(Barriers));
+    if (!b) return NULL;
     b->width = width;
     b->height = height;
     b->h = (bool**)malloc(height * sizeof(bool*));
-    for (int y = 0; y < height; y++)
-        b->h[y] = (bool*)calloc(width - 1, sizeof(bool));
     b->v = (bool**)malloc((height - 1) * sizeof(bool*));
-    for (int y = 0; y < height - 1; y++)
+    if (!b->h || !b->v) {
+        free(b);
+        return NULL;
+    }
+    for (int y = 0; y < height; y++) {
+        b->h[y] = (bool*)calloc(width - 1, sizeof(bool));
+        if (!b->h[y]) { /* error handling omitted */ }
+    }
+    for (int y = 0; y < height - 1; y++) {
         b->v[y] = (bool*)calloc(width, sizeof(bool));
+    }
     return b;
 }
 
@@ -28,15 +35,20 @@ void set_h_barrier(Barriers *b, int y, int x, bool val) {
     if (y >= 0 && y < b->height && x >= 0 && x < b->width - 1)
         b->h[y][x] = val;
 }
+
 void set_v_barrier(Barriers *b, int y, int x, bool val) {
     if (y >= 0 && y < b->height - 1 && x >= 0 && x < b->width)
         b->v[y][x] = val;
 }
+
 bool has_h_barrier(Barriers *b, int y, int x) {
-    return (y >= 0 && y < b->height && x >= 0 && x < b->width - 1) ? b->h[y][x] : false;
+    if (y < 0 || y >= b->height || x < 0 || x >= b->width - 1) return false;
+    return b->h[y][x];
 }
+
 bool has_v_barrier(Barriers *b, int y, int x) {
-    return (y >= 0 && y < b->height - 1 && x >= 0 && x < b->width) ? b->v[y][x] : false;
+    if (y < 0 || y >= b->height - 1 || x < 0 || x >= b->width) return false;
+    return b->v[y][x];
 }
 
 bool has_barrier_between(Barriers *b, int y1, int x1, int y2, int x2) {
@@ -49,6 +61,5 @@ bool has_barrier_between(Barriers *b, int y1, int x1, int y2, int x2) {
         return has_v_barrier(b, y1, x1);
     if (dy == -1 && dx == 0) // вверх
         return has_v_barrier(b, y1-1, x1);
-    // Диагонали не блокируются
-    return false;
+    return false; // диагонали не блокируются
 }
