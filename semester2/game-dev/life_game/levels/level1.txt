@@ -1,10 +1,10 @@
 4 4
-2 5
+4 5
 000
 000
 000
 000
-000
-000
-000
-Level 1: Infect all cells (use 2 start cells)
+0000
+0000
+0000
+Level 1: Training Grid
